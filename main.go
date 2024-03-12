@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +26,12 @@ type SummaryRequest struct {
 	ActivityName string `json:"activity_name"`
 	BeginDate    string `json:"begin_date"`
 	EndDate      string `json:"end_date"`
+}
+
+type ActivityItem struct {
+	ActivityName string `json:"activity_name"`
+	BeginTime    string `json:"begin_time"`
+	Memo         string `json:"memo"`
 }
 
 const API = "http://localhost:5000"
@@ -122,7 +130,7 @@ func formatText(title string, text string, lineLength int) string {
 	currentLine := ""
 
 	lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, title), "yellow"))
-	lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, ""), "yellow"))
+	lines = append(lines, colorize("┣"+strings.Repeat("━", lineLength+2)+"┫", "yellow"))
 
 	for _, word := range words {
 		if len(currentLine)+len(word)+1 <= lineLength {
@@ -152,19 +160,57 @@ func formatText(title string, text string, lineLength int) string {
 	return strings.Join(result, "\n")
 }
 
-func summaryUsage() {
-	fmt.Println("Usage: summary <interval>")
-	fmt.Println("where <interval> is of format #y#m#w#d, each # representing any number of digits")
+func formatActivityItems(title string, items []ActivityItem, lineLength int) string {
+	border := colorize("┏"+strings.Repeat("━", lineLength+2)+"┓", "yellow")
+	result := []string{border, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, title), "yellow"), colorize("┣"+strings.Repeat("━", lineLength+2)+"┫", "yellow")}
+
+	for i, item := range items {
+		words := strings.Fields(item.Memo)
+		lines := []string{}
+		currentLine := ""
+
+		lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, item.BeginTime+", "+item.ActivityName), "yellow"))
+
+		for _, word := range words {
+			if len(currentLine)+len(word)+1 <= lineLength {
+				if currentLine != "" {
+					currentLine += " "
+				}
+				currentLine += word
+			} else {
+				lines = append(lines, currentLine)
+				currentLine = word
+			}
+		}
+
+		if currentLine != "" {
+			lines = append(lines, currentLine)
+		}
+
+		for i := 1; i < len(lines); i++ {
+			lines[i] = colorize("┃", "yellow") + colorize(fmt.Sprintf(" %-*s ", lineLength, lines[i]), "white") + colorize("┃", "yellow")
+		}
+
+		if i < len(items)-1 {
+			lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, ""), "yellow"))
+		}
+
+		result = append(result, lines...)
+	}
+
+	result = append(result, colorize("┗"+strings.Repeat("━", lineLength+2)+"┛", "yellow"))
+
+	return strings.Join(result, "\n")
 }
 
-func summary(interval string) {
+func buildDateRange(interval string, queryParams url.Values) (url.Values, error) {
 	pattern := `([0-9]+y)?([0-9]+m)?([0-9]+w)?([0-9]+d)?`
 
 	// Compile the pattern
 	regex, err := regexp.Compile(pattern)
 	if err != nil {
 		fmt.Println("Error compiling regex:", err)
-		return
+		return queryParams, errors.New("bad regex")
 	}
 
 	if regex.MatchString(interval) {
@@ -199,47 +245,120 @@ func summary(interval string) {
 			}
 		}
 
-		baseURL := API + "/get-summary"
 		endDate := time.Now()
 		beginDate := endDate.AddDate(0, 0, -dayCount)
 
-		// Create URL with query parameters
-		u, err := url.Parse(baseURL)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		queryParams := u.Query()
 		queryParams.Set("beginDate", beginDate.Format("2006-01-02"))
 		queryParams.Set("endDate", endDate.AddDate(0, 0, 1).Format("2006-01-02"))
-		u.RawQuery = queryParams.Encode()
-
-		resp, err := http.Get(u.String())
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		var jsonData map[string]interface{}
-		err = json.Unmarshal(body, &jsonData)
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
-
-		if val, ok := jsonData["response"]; ok {
-			fmt.Println(formatText(fmt.Sprintf("Summary of %s to %s", beginDate.Format("2006-01-02"), endDate.Format("2006-01-02")), val.(string), 80))
-		}
 	} else {
+		return queryParams, errors.New("bad date interval")
+	}
+
+	return queryParams, nil
+}
+
+func summaryUsage() {
+	fmt.Println("Usage: summary <interval>")
+	fmt.Println("where <interval> is of format #y#m#w#d, each # representing any number of digits")
+}
+
+func summary(interval string) {
+	baseURL := API + "/get-summary"
+
+	// Create URL with query parameters
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	queryParams := u.Query()
+	queryParams, err = buildDateRange(interval, queryParams)
+	if err != nil {
 		summaryUsage()
+	}
+
+	u.RawQuery = queryParams.Encode()
+
+	resp, err := http.Get(u.String())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	var jsonData map[string]interface{}
+	err = json.Unmarshal(body, &jsonData)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	if val, ok := jsonData["response"]; ok {
+		fmt.Println(formatText(fmt.Sprintf("Summary of %s to %s", queryParams.Get("beginDate"), queryParams.Get("endDate")), val.(string), 80))
+	}
+}
+
+func listUsage() {
+	fmt.Println("Usage: list <interval>")
+	fmt.Println("where <interval> is of format #y#m#w#d, each # representing any number of digits")
+}
+
+func list(interval string) {
+	baseURL := API + "/get-activities"
+
+	// Create URL with query parameters
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	queryParams := u.Query()
+	queryParams, err = buildDateRange(interval, queryParams)
+	if err != nil {
+		listUsage()
+	}
+
+	u.RawQuery = queryParams.Encode()
+
+	resp, err := http.Get(u.String())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	var jsonData map[string][]ActivityItem
+	err = json.Unmarshal(body, &jsonData)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	dates := make([]string, 0, len(jsonData))
+	for k := range jsonData {
+		dates = append(dates, k)
+	}
+
+	sort.Strings(dates)
+
+	for _, d := range dates {
+		fmt.Println(formatActivityItems(d, jsonData[d], 80))
 	}
 }
 
@@ -259,6 +378,13 @@ func main() {
 		}
 
 		summary(os.Args[2])
+	} else if os.Args[1] == "list" {
+		if len(os.Args) != 3 {
+			listUsage()
+			return
+		}
+
+		list(os.Args[2])
 	} else {
 		fmt.Println("Unrecognized command " + os.Args[1] + "\n" + usage)
 		return
