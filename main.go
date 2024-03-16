@@ -41,8 +41,7 @@ type ActivityItem struct {
 	Memo         string `json:"memo"`
 }
 
-// const API = "https://ritual-api-production.up.railway.app"
-const API = "http://localhost:5000"
+const API = "https://ritual-api-production.up.railway.app"
 
 func colorize(text, color string) string {
 	colors := map[string]string{
