@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"regexp"
@@ -28,12 +30,18 @@ type SummaryRequest struct {
 	EndDate      string `json:"end_date"`
 }
 
+type SignupRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type ActivityItem struct {
 	ActivityName string `json:"activity_name"`
 	BeginTime    string `json:"begin_time"`
 	Memo         string `json:"memo"`
 }
 
+// const API = "https://ritual-api-production.up.railway.app"
 const API = "http://localhost:5000"
 
 func colorize(text, color string) string {
@@ -58,7 +66,7 @@ func colorize(text, color string) string {
 
 func log() {
 	if len(os.Args) != 5 {
-		fmt.Println("Usage: ./cli log <activity_name> <duration> <message>")
+		fmt.Println("Usage: ./ritual log <activity_name> <duration> <message>")
 		return
 	}
 
@@ -95,6 +103,15 @@ func log() {
 		return
 	}
 
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
 	req.Header.Add("Content-Type", "application/json")
 
 	res, err := client.Do(req)
@@ -108,6 +125,12 @@ func log() {
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		fmt.Println(err)
+		return
+	}
+
+	if res.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", res.StatusCode)
+		fmt.Println("Response message:", string(body))
 		return
 	}
 
@@ -280,7 +303,24 @@ func summary(interval string) {
 
 	u.RawQuery = queryParams.Encode()
 
-	resp, err := http.Get(u.String())
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -291,6 +331,12 @@ func summary(interval string) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println(err)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", resp.StatusCode)
+		fmt.Println("Response message:", string(body))
 		return
 	}
 
@@ -314,7 +360,6 @@ func listUsage() {
 func list(interval string) {
 	baseURL := API + "/get-activities"
 
-	// Create URL with query parameters
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		fmt.Println(err)
@@ -329,7 +374,24 @@ func list(interval string) {
 
 	u.RawQuery = queryParams.Encode()
 
-	resp, err := http.Get(u.String())
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -340,6 +402,12 @@ func list(interval string) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println(err)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", resp.StatusCode)
+		fmt.Println("Response message:", string(body))
 		return
 	}
 
@@ -362,31 +430,137 @@ func list(interval string) {
 	}
 }
 
-func main() {
-	usage := "Usage: ./ritual <command> <...args>"
-	if len(os.Args) == 1 {
-		fmt.Println(usage)
+func signupUsage() {
+	fmt.Println(colorize("Usage: ", "yellow") + "./ritual signup <email> <password>")
+}
+
+func signup(username string, password string) {
+	if len(os.Args) != 4 {
+		fmt.Println("Usage: ./ritual signup <email> <password>")
 		return
 	}
 
-	if os.Args[1] == "log" {
+	_, err := mail.ParseAddress(username)
+	if err != nil {
+		fmt.Println(colorize("Error: ", "yellow") + "Invalid email address")
+		return
+	}
+
+	payload := SignupRequest{
+		Username: username,
+		Password: password,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	url := API + "/create-account"
+	method := "POST"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(string(body))
+}
+
+func help() {
+	fmt.Println(colorize("Usage:", "yellow"))
+	fmt.Println("  ./ritual <command> [options]")
+	fmt.Println()
+	fmt.Println(colorize("Commands:", "yellow"))
+	fmt.Println("  log       Log an activity")
+	fmt.Println("  summary   Get a summary of activities for a given interval")
+	fmt.Println("  list      List activities for a given interval")
+	fmt.Println()
+	fmt.Println(colorize("Options:", "yellow"))
+	fmt.Println("  log:")
+	fmt.Println("    <activity_name>   Name of the activity")
+	fmt.Println("    <duration>        Duration of the activity (in minutes)")
+	fmt.Println("    <message>         Memo or description of the activity")
+	fmt.Println()
+	fmt.Println("  summary:")
+	fmt.Println("    <interval>        Interval for the summary (e.g., 1y2m3w4d)")
+	fmt.Println()
+	fmt.Println("  list:")
+	fmt.Println("    <interval>        Interval for listing activities (e.g., 1y2m3w4d)")
+	fmt.Println()
+	fmt.Println(colorize("Interval Format:", "yellow"))
+	fmt.Println("  The <interval> argument should be in the format #y#m#w#d, where:")
+	fmt.Println("    #y represents the number of years")
+	fmt.Println("    #m represents the number of months")
+	fmt.Println("    #w represents the number of weeks")
+	fmt.Println("    #d represents the number of days")
+	fmt.Println("  Each # can be any number of digits.")
+	fmt.Println()
+	fmt.Println(colorize("Examples:", "yellow"))
+	fmt.Println("  ./ritual log coding 120 \"Worked on the CLI tool\"")
+	fmt.Println("  ./ritual summary 1m2w")
+	fmt.Println("  ./ritual list 2w3d")
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		help()
+		return
+	}
+
+	switch os.Args[1] {
+	case "log":
 		log()
-	} else if os.Args[1] == "summary" {
+
+	case "summary":
 		if len(os.Args) != 3 {
 			summaryUsage()
 			return
 		}
 
 		summary(os.Args[2])
-	} else if os.Args[1] == "list" {
+
+	case "list":
 		if len(os.Args) != 3 {
 			listUsage()
 			return
 		}
 
 		list(os.Args[2])
-	} else {
-		fmt.Println("Unrecognized command " + os.Args[1] + "\n" + usage)
+
+	case "help":
+		help()
+
+	case "signup":
+		if len(os.Args) != 4 {
+			signupUsage()
+			return
+		}
+
+		signup(os.Args[2], os.Args[3])
+
+	default:
+		fmt.Println("Unrecognized command " + os.Args[1] + "\n")
+		help()
 		return
 	}
 }
