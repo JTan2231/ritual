@@ -24,6 +24,10 @@ type LogRequest struct {
 	Memo         string `json:"memo"`
 }
 
+type ChatRequest struct {
+	Chat string `json:"chat"`
+}
+
 type SummaryRequest struct {
 	ActivityName string `json:"activity_name"`
 	BeginDate    string `json:"begin_date"`
@@ -35,13 +39,17 @@ type SignupRequest struct {
 	Password string `json:"password"`
 }
 
-type ActivityItem struct {
+type ActivityListItem struct {
 	ActivityName string `json:"activity_name"`
-	BeginTime    string `json:"begin_time"`
+	BeginTime    string `json:"activity_begin"`
+	EndTime      string `json:"activity_end"`
+	Duration     string
 	Memo         string `json:"memo"`
 }
 
 const API = "https://ritual-api-production.up.railway.app"
+
+// TODO: there's a lot of repeated code here; clean up requests into shared functions
 
 func colorize(text, color string) string {
 	colors := map[string]string{
@@ -136,6 +144,170 @@ func log() {
 	fmt.Println(string(body))
 }
 
+// TODO: This should handle date trimming, not the backend
+func displayActivityListItems(jsonData map[string][]ActivityListItem) {
+	dates := make([]string, 0, len(jsonData))
+	for k := range jsonData {
+		dates = append(dates, k)
+	}
+
+	sort.Strings(dates)
+
+	timeFormat := "15:04:05"
+	for _, d := range dates {
+		day := jsonData[d]
+		for i, activity := range day {
+			t1, _ := time.Parse(timeFormat, activity.BeginTime)
+			t2, _ := time.Parse(timeFormat, activity.EndTime)
+
+			activity.Duration = fmt.Sprintf("%d minutes", int(t2.Sub(t1).Minutes()))
+			activity.BeginTime = activity.BeginTime[:len(timeFormat)-3]
+			activity.EndTime = activity.EndTime[:len(timeFormat)-3]
+
+			day[i] = activity
+		}
+
+		fmt.Println(formatActivityListItems(d, day, 80))
+	}
+}
+
+// TODO: what if we're not given a time or duration?
+func chat() {
+	if len(os.Args) != 3 {
+		fmt.Println("Usage: ./ritual chat \"your chat message\"")
+		return
+	}
+
+	payload := ChatRequest{
+		Chat: os.Args[2],
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	url := API + "/chat"
+	method := "POST"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if res.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", res.StatusCode)
+		fmt.Println("Response message:", string(body))
+		return
+	}
+
+	var jsonData map[string][]ActivityListItem
+	err = json.Unmarshal(body, &jsonData)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	displayActivityListItems(jsonData)
+
+	activityItems := make([]ActivityListItem, 0)
+	for _, value := range jsonData {
+		// we took away the seconds earlier, now we gotta add them back so the backend doesn't throw a fit
+		for i, v := range value {
+			v.BeginTime += ":00"
+			v.EndTime += ":00"
+
+			value[i] = v
+		}
+
+		activityItems = append(activityItems, value...)
+	}
+
+	var response string
+	fmt.Print(colorize("Does this look correct? y/n: ", "white"))
+	fmt.Scanln(&response)
+
+	if response == "y" || response == "Y" {
+		jsonPayload, err := json.Marshal(activityItems)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		url = API + "/add-activities"
+
+		// TODO: lotta repeated code (again)
+		req, err = http.NewRequest(method, url, bytes.NewBuffer(jsonPayload))
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+		password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+		if !hasUser || !hasPass {
+			fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+			return
+		}
+
+		req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+		req.Header.Add("Content-Type", "application/json")
+
+		res, err := client.Do(req)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		defer res.Body.Close()
+
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		if res.StatusCode != 200 {
+			fmt.Printf("Request failed with status code: %d\n", res.StatusCode)
+			fmt.Println("Response message:", string(body))
+			return
+		}
+
+		fmt.Println(string(body))
+	} else {
+		fmt.Println("Incorrect format")
+	}
+}
+
 func countToNumber(count string) int {
 	countNumber, err := strconv.Atoi(count)
 	if err == nil {
@@ -182,7 +354,7 @@ func formatText(title string, text string, lineLength int) string {
 	return strings.Join(result, "\n")
 }
 
-func formatActivityItems(title string, items []ActivityItem, lineLength int) string {
+func formatActivityListItems(title string, items []ActivityListItem, lineLength int) string {
 	border := colorize("┏"+strings.Repeat("━", lineLength+2)+"┓", "yellow")
 	result := []string{border, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, title), "yellow"), colorize("┣"+strings.Repeat("━", lineLength+2)+"┫", "yellow")}
 
@@ -191,7 +363,7 @@ func formatActivityItems(title string, items []ActivityItem, lineLength int) str
 		lines := []string{}
 		currentLine := ""
 
-		lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, item.BeginTime+", "+item.ActivityName), "yellow"))
+		lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, item.BeginTime+", "+item.ActivityName+" - "+item.Duration), "yellow"))
 
 		for _, word := range words {
 			if len(currentLine)+len(word)+1 <= lineLength {
@@ -410,23 +582,14 @@ func list(interval string) {
 		return
 	}
 
-	var jsonData map[string][]ActivityItem
+	var jsonData map[string][]ActivityListItem
 	err = json.Unmarshal(body, &jsonData)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
-	dates := make([]string, 0, len(jsonData))
-	for k := range jsonData {
-		dates = append(dates, k)
-	}
-
-	sort.Strings(dates)
-
-	for _, d := range dates {
-		fmt.Println(formatActivityItems(d, jsonData[d], 80))
-	}
+	displayActivityListItems(jsonData)
 }
 
 func signupUsage() {
@@ -557,8 +720,11 @@ func main() {
 
 		signup(os.Args[2], os.Args[3])
 
+	case "chat":
+		chat()
+
 	default:
-		fmt.Println("Unrecognized command " + os.Args[1] + "\n")
+		fmt.Println("Unrecognized command " + colorize(os.Args[1], "yellow") + "\n")
 		help()
 		return
 	}
