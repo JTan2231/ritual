@@ -19,13 +19,25 @@ import (
 )
 
 type LogRequest struct {
-	ActivityName string `json:"activity_name"`
-	Duration     int    `json:"duration"`
-	Memo         string `json:"memo"`
+	ActivityName  string `json:"activity_name"`
+	ActivityBegin string `json:"activity_begin"`
+	ActivityEnd   string `json:"activity_end"`
+	Memo          string `json:"memo"`
+}
+
+type LogFeedback struct {
+	Feedback string `json:"feedback"`
+	Message  string `json:"message"`
 }
 
 type ChatRequest struct {
 	Chat string `json:"chat"`
+}
+
+type TuneRequest struct {
+	Core     string `json:"core"`
+	Summary  string `json:"summary"`
+	Feedback string `json:"feedback"`
 }
 
 type SummaryRequest struct {
@@ -47,7 +59,8 @@ type ActivityListItem struct {
 	Memo         string `json:"memo"`
 }
 
-const API = "https://ritual-api-production.up.railway.app"
+// const API = "https://ritual-api-production.up.railway.app"
+const API = "http://localhost:5000"
 
 // TODO: there's a lot of repeated code here; clean up requests into shared functions
 
@@ -86,12 +99,18 @@ func log() {
 		return
 	}
 
+	currentTime := time.Now()
+
+	activityBegin := currentTime.Add(time.Duration(-duration) * time.Minute).Format("2006-01-02 15:04:05")
+	activityEnd := currentTime.Format("2006-01-02 15:04:05")
+
 	memo := os.Args[4]
 
 	payload := LogRequest{
-		ActivityName: activityName,
-		Duration:     duration,
-		Memo:         memo,
+		ActivityName:  activityName,
+		ActivityBegin: activityBegin,
+		ActivityEnd:   activityEnd,
+		Memo:          memo,
 	}
 
 	jsonPayload, err := json.Marshal(payload)
@@ -141,7 +160,14 @@ func log() {
 		return
 	}
 
-	fmt.Println(string(body))
+	var response LogFeedback
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(formatText("", response.Feedback))
 }
 
 // TODO: This should handle date trimming, not the backend
@@ -308,6 +334,81 @@ func chat() {
 	}
 }
 
+func tune() {
+	if len(os.Args) != 4 {
+		fmt.Println("Usage: ./ritual tune <core|summary|feedback> \"your tuning message\"")
+		return
+	}
+
+	promptType := os.Args[2]
+
+	var core string
+	var summary string
+	var feedback string
+
+	if promptType == "core" {
+		core = os.Args[3]
+	} else if promptType == "summary" {
+		summary = os.Args[3]
+	} else if promptType == "feedback" {
+		feedback = os.Args[3]
+	}
+
+	if !(promptType == "core" || promptType == "summary" || promptType == "feedback") {
+		fmt.Println("Usage: ./ritual tune <core|summary|feedback> \"your tuning message\"")
+		return
+	}
+
+	payload := TuneRequest{
+		Core:     core,
+		Summary:  summary,
+		Feedback: feedback,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	url := API + "/tune"
+	method := "POST"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(string(body))
+}
+
 func countToNumber(count string) int {
 	countNumber, err := strconv.Atoi(count)
 	if err == nil {
@@ -318,13 +419,17 @@ func countToNumber(count string) int {
 	}
 }
 
-func formatText(title string, text string, lineLength int) string {
+func formatText(title string, text string) string {
+	lineLength := 80
+
 	words := strings.Fields(text)
 	lines := []string{}
 	currentLine := ""
 
-	lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, title), "yellow"))
-	lines = append(lines, colorize("┣"+strings.Repeat("━", lineLength+2)+"┫", "yellow"))
+	if len(title) > 0 {
+		lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, title), "yellow"))
+		lines = append(lines, colorize("┣"+strings.Repeat("━", lineLength+2)+"┫", "yellow"))
+	}
 
 	for _, word := range words {
 		if len(currentLine)+len(word)+1 <= lineLength {
@@ -342,7 +447,12 @@ func formatText(title string, text string, lineLength int) string {
 		lines = append(lines, currentLine)
 	}
 
-	for i := 2; i < len(lines); i++ {
+	i := 0
+	if len(title) > 0 {
+		i = 2
+	}
+
+	for ; i < len(lines); i++ {
 		lines[i] = colorize("┃", "yellow") + colorize(fmt.Sprintf(" %-*s ", lineLength, lines[i]), "white") + colorize("┃", "yellow")
 	}
 
@@ -519,7 +629,7 @@ func summary(interval string) {
 	}
 
 	if val, ok := jsonData["response"]; ok {
-		fmt.Println(formatText(fmt.Sprintf("Summary of %s to %s", queryParams.Get("beginDate"), queryParams.Get("endDate")), val.(string), 80))
+		fmt.Println(formatText(fmt.Sprintf("Summary of %s to %s", queryParams.Get("beginDate"), queryParams.Get("endDate")), val.(string)))
 	}
 }
 
@@ -656,19 +766,27 @@ func help() {
 	fmt.Println("  log       Log an activity")
 	fmt.Println("  summary   Get a summary of activities for a given interval")
 	fmt.Println("  list      List activities for a given interval")
+	fmt.Println("  chat      Log activities with a conversational prompt")
+	fmt.Println("  tune      Adjust the tone of GPT's responses")
 	fmt.Println()
 	fmt.Println(colorize("Options:", "yellow"))
 	fmt.Println("  log:")
-	fmt.Println("    <activity_name>   Name of the activity")
-	fmt.Println("    <duration>        Duration of the activity (in minutes)")
-	fmt.Println("    <message>         Memo or description of the activity")
+	fmt.Println("    <activity_name>         Name of the activity")
+	fmt.Println("    <duration>              Duration of the activity (in minutes)")
+	fmt.Println("    <message>               Memo or description of the activity")
 	fmt.Println()
 	fmt.Println("  summary:")
-	fmt.Println("    <interval>        Interval for the summary (e.g., 1y2m3w4d)")
+	fmt.Println("    <interval>              Interval for the summary (e.g., 1y2m3w4d)")
 	fmt.Println()
 	fmt.Println("  list:")
-	fmt.Println("    <interval>        Interval for listing activities (e.g., 1y2m3w4d)")
+	fmt.Println("    <interval>              Interval for listing activities (e.g., 1y2m3w4d)")
 	fmt.Println()
+	fmt.Println("  chat:")
+	fmt.Println("    <chat message>          Conversational prompt (e.g., \"walked this morning for 30 minutes around 9, played tekken for 90 minutes around noon\")")
+	fmt.Println()
+	fmt.Println("  tune:")
+	fmt.Println("    <core|summary|feedback> Type of GPT response to adjust")
+	fmt.Println("    <chat message>          Conversational prompt")
 	fmt.Println(colorize("Interval Format:", "yellow"))
 	fmt.Println("  The <interval> argument should be in the format #y#m#w#d, where:")
 	fmt.Println("    #y represents the number of years")
@@ -722,6 +840,9 @@ func main() {
 
 	case "chat":
 		chat()
+
+	case "tune":
+		tune()
 
 	default:
 		fmt.Println("Unrecognized command " + colorize(os.Args[1], "yellow") + "\n")
