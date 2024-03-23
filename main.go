@@ -69,8 +69,7 @@ type TerminalDisplayItem struct {
 	Description string
 }
 
-// const API = "https://ritual-api-production.up.railway.app"
-const API = "http://localhost:5000"
+const API = "https://ritual-api-production.up.railway.app"
 
 // TODO: there's a lot of repeated code here; clean up requests into shared functions
 
