@@ -25,6 +25,11 @@ type LogRequest struct {
 	Memo          string `json:"memo"`
 }
 
+type Goal struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 type LogFeedback struct {
 	Feedback string `json:"feedback"`
 	Message  string `json:"message"`
@@ -59,7 +64,13 @@ type ActivityListItem struct {
 	Memo         string `json:"memo"`
 }
 
-const API = "https://ritual-api-production.up.railway.app"
+type TerminalDisplayItem struct {
+	Title       string
+	Description string
+}
+
+// const API = "https://ritual-api-production.up.railway.app"
+const API = "http://localhost:5000"
 
 // TODO: there's a lot of repeated code here; clean up requests into shared functions
 
@@ -169,6 +180,213 @@ func log() {
 	fmt.Println(formatText("", response.Feedback))
 }
 
+func goal() {
+	usage := "Usage: ./ritual goal <set|delete|list> <goal_name> <goal_description>"
+	argc := len(os.Args)
+	if len(os.Args) < 3 {
+		fmt.Println(usage)
+		return
+	}
+
+	option := os.Args[2]
+
+	switch option {
+	case "set":
+		if argc != 5 {
+			fmt.Println("Usage (set): ./ritual goal set <goal_name> <goal_description>")
+			return
+		}
+
+		goalSet(os.Args[3], os.Args[4])
+
+	case "delete":
+		if argc != 4 {
+			fmt.Println("Usage (delete): ./ritual goal delete <goal_name>")
+			return
+		}
+
+		goalDelete(os.Args[3])
+
+	case "list":
+		goalList()
+
+	default:
+		fmt.Println(usage)
+	}
+}
+
+func goalSet(name string, description string) {
+	payload := Goal{
+		Name:        name,
+		Description: description,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	url := API + "/add-goal"
+	method := "POST"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if res.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", res.StatusCode)
+		fmt.Println("Response message:", string(body))
+		return
+	}
+
+	fmt.Println(string(body))
+}
+
+func goalDelete(name string) {
+	baseURL := API + "/delete-goal"
+
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	queryParams := u.Query()
+	queryParams.Set("name", name)
+
+	u.RawQuery = queryParams.Encode()
+
+	req, err := http.NewRequest("DELETE", u.String(), nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", resp.StatusCode)
+		fmt.Println("Response message:", string(body))
+		return
+	}
+
+	fmt.Println(string(body))
+}
+
+func goalList() {
+	baseURL := API + "/get-goals"
+
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		fmt.Println(err)
+		return
+
+	}
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", resp.StatusCode)
+		fmt.Println("Response message:", string(body))
+		return
+	}
+
+	var goals []Goal
+	err = json.Unmarshal(body, &goals)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	terminalItems := make([]TerminalDisplayItem, 0)
+	for _, g := range goals {
+		terminalItems = append(terminalItems, TerminalDisplayItem{Title: g.Name, Description: g.Description})
+	}
+
+	fmt.Println(formatTerminalDisplayItems("", terminalItems))
+}
+
 // TODO: This should handle date trimming, not the backend
 func displayActivityListItems(jsonData map[string][]ActivityListItem) {
 	dates := make([]string, 0, len(jsonData))
@@ -179,9 +397,10 @@ func displayActivityListItems(jsonData map[string][]ActivityListItem) {
 	sort.Strings(dates)
 
 	timeFormat := "15:04:05"
+	terminalItems := make([]TerminalDisplayItem, 0)
 	for _, d := range dates {
 		day := jsonData[d]
-		for i, activity := range day {
+		for _, activity := range day {
 			t1, _ := time.Parse(timeFormat, activity.BeginTime)
 			t2, _ := time.Parse(timeFormat, activity.EndTime)
 
@@ -189,10 +408,10 @@ func displayActivityListItems(jsonData map[string][]ActivityListItem) {
 			activity.BeginTime = activity.BeginTime[:len(timeFormat)-3]
 			activity.EndTime = activity.EndTime[:len(timeFormat)-3]
 
-			day[i] = activity
+			terminalItems = append(terminalItems, TerminalDisplayItem{Title: activity.BeginTime + ", " + activity.ActivityName + " - " + activity.Duration, Description: activity.Memo})
 		}
 
-		fmt.Println(formatActivityListItems(d, day, 80))
+		fmt.Println(formatTerminalDisplayItems(d, terminalItems))
 	}
 }
 
@@ -463,16 +682,22 @@ func formatText(title string, text string) string {
 	return strings.Join(result, "\n")
 }
 
-func formatActivityListItems(title string, items []ActivityListItem, lineLength int) string {
+func formatTerminalDisplayItems(title string, items []TerminalDisplayItem) string {
+	lineLength := 80
+
 	border := colorize("┏"+strings.Repeat("━", lineLength+2)+"┓", "yellow")
-	result := []string{border, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, title), "yellow"), colorize("┣"+strings.Repeat("━", lineLength+2)+"┫", "yellow")}
+	result := []string{border}
+
+	if len(title) > 0 {
+		result = append(result, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, title), "yellow"), colorize("┣"+strings.Repeat("━", lineLength+2)+"┫", "yellow"))
+	}
 
 	for i, item := range items {
-		words := strings.Fields(item.Memo)
+		words := strings.Fields(item.Description)
 		lines := []string{}
 		currentLine := ""
 
-		lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, item.BeginTime+", "+item.ActivityName+" - "+item.Duration), "yellow"))
+		lines = append(lines, colorize(fmt.Sprintf("┃ %-*s ┃", lineLength, item.Title), "yellow"))
 
 		for _, word := range words {
 			if len(currentLine)+len(word)+1 <= lineLength {
@@ -767,6 +992,7 @@ func help() {
 	fmt.Println("  list      List activities for a given interval")
 	fmt.Println("  chat      Log activities with a conversational prompt")
 	fmt.Println("  tune      Adjust the tone of GPT's responses")
+	fmt.Println("  goal      Set goals to guide GPT's responses")
 	fmt.Println()
 	fmt.Println(colorize("Options:", "yellow"))
 	fmt.Println("  log:")
@@ -786,6 +1012,12 @@ func help() {
 	fmt.Println("  tune:")
 	fmt.Println("    <core|summary|feedback> Type of GPT response to adjust")
 	fmt.Println("    <chat message>          Conversational prompt")
+	fmt.Println()
+	fmt.Println("  goal:")
+	fmt.Println("    set                     Placeholder")
+	fmt.Println("    <goal_name>             Name of the activity")
+	fmt.Println("    <goal_description>      Duration of the activity (in minutes)")
+	fmt.Println()
 	fmt.Println(colorize("Interval Format:", "yellow"))
 	fmt.Println("  The <interval> argument should be in the format #y#m#w#d, where:")
 	fmt.Println("    #y represents the number of years")
@@ -842,6 +1074,9 @@ func main() {
 
 	case "tune":
 		tune()
+
+	case "goal":
+		goal()
 
 	default:
 		fmt.Println("Unrecognized command " + colorize(os.Args[1], "yellow") + "\n")
