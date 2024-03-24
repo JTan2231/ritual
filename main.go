@@ -69,7 +69,8 @@ type TerminalDisplayItem struct {
 	Description string
 }
 
-const API = "https://ritual-api-production.up.railway.app"
+// const API = "https://ritual-api-production.up.railway.app"
+const API = "http://localhost:5000"
 
 // TODO: there's a lot of repeated code here; clean up requests into shared functions
 
@@ -331,7 +332,6 @@ func goalList() {
 	if err != nil {
 		fmt.Println(err)
 		return
-
 	}
 
 	req, err := http.NewRequest("GET", u.String(), nil)
@@ -412,6 +412,159 @@ func displayActivityListItems(jsonData map[string][]ActivityListItem) {
 
 		fmt.Println(formatTerminalDisplayItems(d, terminalItems))
 	}
+}
+
+func subgoals() {
+	usage := "Usage: ./ritual subgoals <set|list> <goal_name>"
+	argc := len(os.Args)
+	if len(os.Args) != 4 {
+		fmt.Println(usage)
+		return
+	}
+
+	option := os.Args[2]
+
+	switch option {
+	case "set":
+		if argc != 4 {
+			fmt.Println("Usage (set): ./ritual goal set <goal_name>")
+			return
+		}
+
+		subgoalsSet(os.Args[3])
+
+	case "list":
+		if argc != 4 {
+			fmt.Println("Usage (set): ./ritual goal set <goal_name>")
+			return
+		}
+
+		subgoalsList(os.Args[3])
+
+	default:
+		fmt.Println(usage)
+	}
+}
+
+func subgoalsSet(name string) {
+	payload := Goal{
+		Name: name,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	url := API + "/set-subgoals"
+	method := "POST"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if res.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", res.StatusCode)
+		fmt.Println("Response message:", string(body))
+		return
+	}
+
+	fmt.Println(formatText("", string(body)))
+}
+
+func subgoalsList(name string) {
+	baseURL := API + "/get-subgoals"
+
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	queryParams := u.Query()
+	queryParams.Set("name", name)
+
+	u.RawQuery = queryParams.Encode()
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", resp.StatusCode)
+		fmt.Println("Response message:", string(body))
+		return
+	}
+
+	var goals []Goal
+	err = json.Unmarshal(body, &goals)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	terminalItems := make([]TerminalDisplayItem, 0)
+	for _, g := range goals {
+		terminalItems = append(terminalItems, TerminalDisplayItem{Title: g.Name, Description: g.Description})
+	}
+
+	fmt.Println(formatTerminalDisplayItems("", terminalItems))
 }
 
 // TODO: what if we're not given a time or duration?
@@ -546,18 +699,30 @@ func chat() {
 		}
 
 		fmt.Println(string(body))
+		const API = "http://localhost:5000"
 	} else {
 		fmt.Println("Incorrect format")
 	}
 }
 
 func tune() {
-	if len(os.Args) != 4 {
-		fmt.Println("Usage: ./ritual tune <core|summary|feedback> \"your tuning message\"")
+	usage := "Usage: ./ritual tune <core|summary|feedback|reset> \"your tuning message\""
+	if len(os.Args) < 3 {
+		fmt.Println(usage)
 		return
 	}
 
 	promptType := os.Args[2]
+
+	if promptType == "reset" {
+		tuneReset()
+		return
+	}
+
+	if len(os.Args) != 4 {
+		fmt.Println(usage)
+		return
+	}
 
 	var core string
 	var summary string
@@ -624,6 +789,50 @@ func tune() {
 	}
 
 	fmt.Println(string(body))
+}
+
+func tuneReset() {
+	url := API + "/reset-tune"
+	method := "POST"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
+	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
+
+	if !hasUser || !hasPass {
+		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
+		return
+	}
+
+	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if res.StatusCode != 200 {
+		fmt.Printf("Request failed with status code: %d\n", res.StatusCode)
+		fmt.Println("Response message:", string(body))
+		return
+	}
+
+	fmt.Println(formatText("", string(body)))
 }
 
 func countToNumber(count string) int {
@@ -992,6 +1201,7 @@ func help() {
 	fmt.Println("  chat      Log activities with a conversational prompt")
 	fmt.Println("  tune      Adjust the tone of GPT's responses")
 	fmt.Println("  goal      Set goals to guide GPT's responses")
+	fmt.Println("  subgoals  Generate and set specific objectives for a given goal")
 	fmt.Println()
 	fmt.Println(colorize("Options:", "yellow"))
 	fmt.Println("  log:")
@@ -1014,8 +1224,11 @@ func help() {
 	fmt.Println()
 	fmt.Println("  goal:")
 	fmt.Println("    set                     Placeholder")
-	fmt.Println("    <goal_name>             Name of the activity")
-	fmt.Println("    <goal_description>      Duration of the activity (in minutes)")
+	fmt.Println("    <goal_name>             Name of the goal")
+	fmt.Println("    <goal_description>      Description of the goal")
+	fmt.Println()
+	fmt.Println("  subgoals:")
+	fmt.Println("    <goal_name>             Name of the goal")
 	fmt.Println()
 	fmt.Println(colorize("Interval Format:", "yellow"))
 	fmt.Println("  The <interval> argument should be in the format #y#m#w#d, where:")
@@ -1076,6 +1289,9 @@ func main() {
 
 	case "goal":
 		goal()
+
+	case "subgoals":
+		subgoals()
 
 	default:
 		fmt.Println("Unrecognized command " + colorize(os.Args[1], "yellow") + "\n")
