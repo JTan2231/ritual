@@ -395,9 +395,9 @@ func displayActivityListItems(jsonData map[string][]ActivityListItem) {
 	sort.Strings(dates)
 
 	timeFormat := "15:04:05"
-	terminalItems := make([]TerminalDisplayItem, 0)
 	for _, d := range dates {
 		day := jsonData[d]
+		terminalItems := make([]TerminalDisplayItem, 0)
 		for _, activity := range day {
 			t1, _ := time.Parse(timeFormat, activity.BeginTime)
 			t2, _ := time.Parse(timeFormat, activity.EndTime)
