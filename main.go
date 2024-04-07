@@ -69,7 +69,8 @@ type TerminalDisplayItem struct {
 	Description string
 }
 
-const API = "https://ritual-api-production.up.railway.app"
+// const API = "https://ritual-api-production.up.railway.app"
+const API = "http://localhost:5000"
 
 // TODO: there's a lot of repeated code here; clean up requests into shared functions
 
@@ -399,14 +400,21 @@ func displayActivityListItems(jsonData map[string][]ActivityListItem) {
 		day := jsonData[d]
 		terminalItems := make([]TerminalDisplayItem, 0)
 		for _, activity := range day {
-			t1, _ := time.Parse(timeFormat, activity.BeginTime)
-			t2, _ := time.Parse(timeFormat, activity.EndTime)
+			var title string
+			if len(activity.BeginTime) > 0 && len(activity.EndTime) > 0 {
+				t1, _ := time.Parse(timeFormat, activity.BeginTime)
+				t2, _ := time.Parse(timeFormat, activity.EndTime)
 
-			activity.Duration = fmt.Sprintf("%d minutes", int(t2.Sub(t1).Minutes()))
-			activity.BeginTime = activity.BeginTime[:len(timeFormat)-3]
-			activity.EndTime = activity.EndTime[:len(timeFormat)-3]
+				activity.Duration = fmt.Sprintf("%d minutes", int(t2.Sub(t1).Minutes()))
+				activity.BeginTime = activity.BeginTime[:len(timeFormat)-3]
+				activity.EndTime = activity.EndTime[:len(timeFormat)-3]
 
-			terminalItems = append(terminalItems, TerminalDisplayItem{Title: activity.BeginTime + ", " + activity.ActivityName + " - " + activity.Duration, Description: activity.Memo})
+				title = activity.BeginTime + ", " + activity.ActivityName + " - " + activity.Duration
+			} else {
+				title = activity.ActivityName
+			}
+
+			terminalItems = append(terminalItems, TerminalDisplayItem{Title: title, Description: activity.Memo})
 		}
 
 		fmt.Println(formatTerminalDisplayItems(d, terminalItems))
@@ -564,144 +572,6 @@ func subgoalsList(name string) {
 	}
 
 	fmt.Println(formatTerminalDisplayItems("", terminalItems))
-}
-
-// TODO: what if we're not given a time or duration?
-func chat() {
-	if len(os.Args) != 3 {
-		fmt.Println("Usage: ./ritual chat \"your chat message\"")
-		return
-	}
-
-	payload := ChatRequest{
-		Chat: os.Args[2],
-	}
-
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	url := API + "/chat"
-	method := "POST"
-
-	client := &http.Client{}
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	username, hasUser := os.LookupEnv("RITUAL_USERNAME")
-	password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
-
-	if !hasUser || !hasPass {
-		fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
-		return
-	}
-
-	req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
-	req.Header.Add("Content-Type", "application/json")
-
-	res, err := client.Do(req)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	defer res.Body.Close()
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	if res.StatusCode != 200 {
-		fmt.Printf("Request failed with status code: %d\n", res.StatusCode)
-		fmt.Println("Response message:", string(body))
-		return
-	}
-
-	var jsonData map[string][]ActivityListItem
-	err = json.Unmarshal(body, &jsonData)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	displayActivityListItems(jsonData)
-
-	activityItems := make([]ActivityListItem, 0)
-	for _, value := range jsonData {
-		// we took away the seconds earlier, now we gotta add them back so the backend doesn't throw a fit
-		for i, v := range value {
-			v.BeginTime += ":00"
-			v.EndTime += ":00"
-
-			value[i] = v
-		}
-
-		activityItems = append(activityItems, value...)
-	}
-
-	var response string
-	fmt.Print(colorize("Does this look correct? y/n: ", "white"))
-	fmt.Scanln(&response)
-
-	if response == "y" || response == "Y" {
-		jsonPayload, err := json.Marshal(activityItems)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		url = API + "/add-activities"
-
-		// TODO: lotta repeated code (again)
-		req, err = http.NewRequest(method, url, bytes.NewBuffer(jsonPayload))
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		username, hasUser := os.LookupEnv("RITUAL_USERNAME")
-		password, hasPass := os.LookupEnv("RITUAL_PASSWORD")
-
-		if !hasUser || !hasPass {
-			fmt.Println("Both the $RITUAL_USERNAME and $RITUAL_PASSWORD environment variables need set for this command")
-			return
-		}
-
-		req.Header.Add("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
-		req.Header.Add("Content-Type", "application/json")
-
-		res, err := client.Do(req)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		defer res.Body.Close()
-
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		if res.StatusCode != 200 {
-			fmt.Printf("Request failed with status code: %d\n", res.StatusCode)
-			fmt.Println("Response message:", string(body))
-			return
-		}
-
-		fmt.Println(string(body))
-		const API = "http://localhost:5000"
-	} else {
-		fmt.Println("Incorrect format")
-	}
 }
 
 func tune() {
@@ -1197,7 +1067,6 @@ func help() {
 	fmt.Println("  log       Log an activity")
 	fmt.Println("  summary   Get a summary of activities for a given interval")
 	fmt.Println("  list      List activities for a given interval")
-	fmt.Println("  chat      Log activities with a conversational prompt")
 	fmt.Println("  tune      Adjust the tone of GPT's responses")
 	fmt.Println("  goal      Set goals to guide GPT's responses")
 	fmt.Println("  subgoals  Generate and set specific objectives for a given goal")
@@ -1213,9 +1082,6 @@ func help() {
 	fmt.Println()
 	fmt.Println("  list:")
 	fmt.Println("    <interval>              Interval for listing activities (e.g., 1y2m3w4d)")
-	fmt.Println()
-	fmt.Println("  chat:")
-	fmt.Println("    <chat message>          Conversational prompt (e.g., \"walked this morning for 30 minutes around 9, played tekken for 90 minutes around noon\")")
 	fmt.Println()
 	fmt.Println("  tune:")
 	fmt.Println("    <core|summary|feedback> Type of GPT response to adjust")
@@ -1279,9 +1145,6 @@ func main() {
 		}
 
 		signup(os.Args[2], os.Args[3])
-
-	case "chat":
-		chat()
 
 	case "tune":
 		tune()
