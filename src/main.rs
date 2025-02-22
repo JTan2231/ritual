@@ -168,9 +168,11 @@ async fn main() -> std::io::Result<()> {
         inner: std::sync::Mutex::new(wire::Wire::new(None, Some(false)).unwrap()),
     });
 
-    let port = "8080";
+    // Use the PORT environment variable or default to 8080
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let port = port.parse::<u16>().expect("Invalid port number");
 
-    info!("Server listening on 127.0.0.1:{}", port);
+    info!("Server listening on port {}", port);
 
     HttpServer::new(move || {
         App::new().app_data(client.clone()).service(
@@ -179,7 +181,7 @@ async fn main() -> std::io::Result<()> {
                 .route("/weekly", web::post().to(handle_weekly)),
         )
     })
-    .bind(format!("127.0.0.1:{}", port))?
+    .bind(("0.0.0.0", port))?
     .run()
     .await
 }
